@@ -1,0 +1,869 @@
+
+R version 3.4.4 (2018-03-15) -- "Someone to Lean On"
+Copyright (C) 2018 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> rm(list = ls())
+> ## We use dplyr for filtering data and aggregating
+> library( dplyr)
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+> library( ggplot2 )
+> library( ggrepel)
+> library( stargazer )
+
+Please cite as: 
+
+ Hlavac, Marek (2018). stargazer: Well-Formatted Regression and Summary Statistics Tables.
+ R package version 5.2.2. https://CRAN.R-project.org/package=stargazer 
+
+> 
+> ## This gives a time series of infections around the world merged with population data.
+> worldInfection <- read.csv("../../Data/mergedData.csv")
+> 
+> 
+> ## Table giving entry into Iceland in 2020 by country of origin
+> iceLandEntry <- read.csv("../../Data/IcelandEntry.csv" )
+> 
+> ## This function returns the dataframe for available states/counties given by cutoffDate
+> ## where alpha can be computed by lm( Confirmed ~ Reg - 1, data = MergedData )
+> EstimateAlpha <- function( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate,
++                           iceLandEntry, excludeEarly, useItaly, useDECODE, Lag, fullEU ){
++     stateInfection <- read.csv("../../Data/time_series_covid19_confirmed_US.csv" )
++ 
++     if( excludeEarly ){
++ 
++         ## We only exclude Seattle. Consider also the removal of San
++         ## Diego and Maricopa AZ as they also had early infection.
++         stateInfection <- stateInfection %>% filter( !(Combined_Key %in% c( "King, Washington, US" ) ) )
++     }
++     stateInfection <- merge( x=statePop[,c("Pop", "Combined_Key")], y = stateInfection,
++                             by="Combined_Key" )
++ 
++     chinaData <- worldInfection[match( "China", worldInfection$Country.Region ),]
++     italyData <- worldInfection[match( "Italy", worldInfection$Country.Region ),]
++     spainData <- worldInfection[match( "Spain", worldInfection$Country.Region ),]
++     germanData <- worldInfection[match( "Germany", worldInfection$Country.Region ),]
++     ukData <- worldInfection[match( "United Kingdom", worldInfection$Country.Region ),]
++ 
++    
++     ## Get the dates from the string cutoffDate
++     PeriodT1Col <- 0
++     if( substr( cutoffDate, 1, 2 ) == "03" ){
++         PeriodT1Col <- match( "X3.1.20", names(worldInfection) ) - 1 +
++             as.numeric( substr(cutoffDate, 4,5 ) ) 
++         T1ColUS <- match( "X3.1.2020", names(stateInfection) ) - 1 +
++             as.numeric( substr(cutoffDate, 4,5 ) )
++     }else if( substr( cutoffDate, 1, 2 ) == "02" ){
++         PeriodT1Col <- match( "X2.1.20", names(worldInfection) ) - 1 +
++             as.numeric( substr(cutoffDate, 4,5 ) )
++         T1ColUS <- match( "X2.1.2020", names(stateInfection) ) - 1 +
++             as.numeric( substr(cutoffDate, 4,5 ) )
++     }
++     
++ 
++     ## Note this only works for Feb T0. Need to modify for other months.
++     PeriodT0ColChina <- match( "X2.1.20", names(worldInfection) ) - 1 +
++         as.numeric( substr(t0DateChina, 4,5 ) )
++ 
++     ## Italy begins to record infections much later than China, need a separate date
++     PeriodT0ColItaly <- match( "X2.1.20", names(worldInfection) ) - 1 +
++         as.numeric( substr(t0DateItaly, 4,5 ) )
++ 
++     
++     ## We want to remove the Wuhan Infected since they are unable to travel. 
++     ChinaConfirmationData <- read.csv( "../../Data/ChinaCity_Confirmed_Map_0115_0318.csv" )
++     wuhanInfected <- ChinaConfirmationData[match( "Wuhan", ChinaConfirmationData$City_EN ),
++                                            match( "T_C_0201", names(ChinaConfirmationData)) - 1
++                                            + as.numeric( substr(t0DateChina, 4,5 ) )]
++         
++     chinaPeriodOne <- chinaData[PeriodT0ColChina+Lag] - wuhanInfected
++     chinaPeriodTwo <- chinaData[PeriodT1Col]
++ 
++ 
++     
++     italyPeriodOne <- italyData[PeriodT0ColItaly+Lag]
++     italyPeriodTwo <- italyData[PeriodT1Col]
++ 
++     spainPeriodOne <- spainData[PeriodT0ColItaly+Lag]
++     spainPeriodTwo <- spainData[PeriodT1Col]
++     germanPeriodOne <- germanData[PeriodT0ColItaly+Lag]
++     germanPeriodTwo <- germanData[PeriodT1Col]
++     ukPeriodOne <- ukData[PeriodT0ColItaly+Lag]
++     ukPeriodTwo <- ukData[PeriodT1Col]
++ 
++     chinaPop <- chinaData$Population..2020.
++     italyPop <- italyData$Population..2020.
++     spainPop <- spainData$Population..2020.
++     germanyPop <- germanData$Population..2020.
++     ukPop <- ukData$Population..2020.
++ 
++     stateInfection$Confirmed <- stateInfection[,T1ColUS]
++     
++     MergedData <- merge( x = mDF[,c("Combined_Key","ChinaTravel","ItalyTravel","SpainTravel", "GermanyTravel", "UKTravel")], y = stateInfection[,c("Combined_Key","Confirmed","Pop")], by="Combined_Key" ) %>% filter( Confirmed > 0 )
++ 
++ 
++     ## RHS: $ R_{c,0} M_i \int_{T_0}^{T_1} \frac{1}{N_c - R_{c,t} }$ without lags.
++     ## RHS: $ R_{c,k} M_i \int_{T_0}^{T_1-k} \frac{1}{N_c - R_{c,t} }$ with lags. 
++ 
++     ## Note that our M_i contains travel over the interval T_0 to T_1,
++     ## so we sum from T_0 to T_1 - k, and divide by the total length
++     ## from T_0 to T_1.
++     reg <- function( sourceP1, Travel, sourceTSeriesCum, sourcePop ){
++         exp( log( as.numeric(Travel) ) + log(as.numeric(sourceP1)))*sum( exp( - log( sourcePop - as.numeric(sourceTSeriesCum) ) ) )
++     }
++     
++ 
++     ## chinaData and Italy data contains the cumulative infections:
++     ## R_c, so sourceTSeriesCum is just the array of the cumulative
++     ## from T_0 to T_1-k. But length is T_0 to T_1
++     if( useItaly ){
++         MergedData$Reg <- reg(  chinaPeriodOne, MergedData$ChinaTravel,
++                               chinaData[PeriodT0ColChina:(PeriodT1Col-Lag)] - wuhanInfected,
++                               chinaPop ) +
++             reg( italyPeriodOne, MergedData$ItalyTravel,
++                 italyData[PeriodT0ColItaly:(PeriodT1Col-Lag)], italyPop)
++         if( fullEU ){
++             MergedData$Reg <- MergedData$Reg + 
++                 reg( spainPeriodOne, MergedData$SpainTravel,
++                     spainData[PeriodT0ColItaly:(PeriodT1Col-Lag)], spainPop) +
++                 reg( germanPeriodOne, MergedData$GermanyTravel,
++                     germanData[PeriodT0ColItaly:(PeriodT1Col-Lag)], germanyPop) +
++                 reg( ukPeriodOne, MergedData$UKTravel,
++                     ukData[PeriodT0ColItaly:(PeriodT1Col-Lag)], ukPop)
++         }
++     }else{
++         MergedData$Reg <- reg(  chinaPeriodOne, MergedData$ChinaTravel,
++                               chinaData[PeriodT0ColChina:(PeriodT1Col-Lag)] - wuhanInfected, chinaPop )
++     }
++     
++     ## For computing Reg for Iceland.
++     iceEntryChina <- iceLandEntry$useMe[match("China", iceLandEntry$X2020)]
++     iceEntryItaly <- iceLandEntry$useMe[match("Italy", iceLandEntry$X2020)]
++     iceEntrySpain <- iceLandEntry$useMe[match("Spain", iceLandEntry$X2020)]
++     iceEntryGermany <- iceLandEntry$useMe[match("Germany", iceLandEntry$X2020)]
++     iceEntryUK <- iceLandEntry$useMe[match("United Kingdom", iceLandEntry$X2020)]
++ 
++     # 67
++     iceLandData <- worldInfection[match("Iceland", worldInfection$Country.Region),]
++ 
++     icePop <- iceLandData$Population..2020.
++ 
++     ## We use only the First wave of deCODE From Mar 15-19
++     
++     deCodePercent <- (48/5490)
++     icePeriodTwo <- 0.0
++     if( useDECODE ){
++         icePeriodTwo <- (deCodePercent*icePop / iceLandData$X3.15.20)*iceLandData[PeriodT1Col-Lag]
++     }else{
++         icePeriodTwo <- iceLandData[PeriodT1Col-Lag]*2
++     }
++ 
++     if( useItaly ){
++         denom <- reg(  chinaPeriodOne, iceEntryChina,
++                               chinaData[PeriodT0ColChina:(PeriodT1Col-Lag)] - wuhanInfected,
++                               chinaPop ) +
++             reg( italyPeriodOne, iceEntryItaly,
++                 italyData[PeriodT0ColItaly:(PeriodT1Col-Lag)], italyPop)
++         if( fullEU ){
++             denom <- denom + 
++                 reg( spainPeriodOne, iceEntrySpain,
++                     spainData[PeriodT0ColItaly:(PeriodT1Col-Lag)], spainPop) +
++                 reg( germanPeriodOne, iceEntryGermany,
++                     germanData[PeriodT0ColItaly:(PeriodT1Col-Lag)], germanyPop) +
++                 reg( ukPeriodOne, iceEntryUK,
++                     ukData[PeriodT0ColItaly:(PeriodT1Col-Lag)], ukPop)
++         }
++         
++         iceAlphaBetaGamma <- icePeriodTwo / (denom)
++     }else{
++ 
++         iceAlphaBetaGamma <- icePeriodTwo / (reg( chinaPeriodOne, iceEntryChina, chinaData[PeriodT0ColChina:(PeriodT1Col-Lag)] - wuhanInfected, chinaPop ))
++     }
++ 
++     MergedData$alpha <- MergedData$Confirmed / (MergedData$Reg * as.numeric(iceAlphaBetaGamma) )
++ 
++     MergedData$AlphaC <- 1.0 - MergedData$alpha##format( 1.0 - as.numeric(MergedData$alpha), digits=3)
++ 
++     MergedData$InfectionsPerConfirmed <- MergedData$AlphaC / MergedData$alpha
++         ##format( as.numeric(MergedData$AlphaC) / as.numeric(MergedData$alpha), digits=3)
++ 
++     MergedData$iceAlphaBetaGamma <- as.numeric(iceAlphaBetaGamma)
++     
++     MergedData$Reg <- MergedData$Reg * as.numeric(iceAlphaBetaGamma)
++ 
++     MergedData
++ }
+> 
+> mDF <- read.csv( "../../Data/countyLevelTravelData_US.csv", sep=";")
+> mDF2 <- read.csv("../../Data/DataFinal/EUtravel.csv" )[1:30,]
+> mDF2$SpainSum <- mDF2$SpainJan + mDF2$SpainFeb
+> mDF2$GermanySum <- mDF2$GermanyJan + mDF2$GermanyFeb
+> mDF2$UKSum <- mDF2$UKJan + mDF2$UKFeb
+> mDF2$Combined_Key <- paste( mDF$County, "US", sep=", ")
+> 
+> statePop <- read.csv("../../Data/US_CountyPop_Top30Ports.csv", sep=";")
+> mDF$Combined_Key <- paste( mDF$County, "US", sep=", ")
+> statePop$Combined_Key <- paste( statePop$County, "US", sep=", ")
+> 
+> mDF <- merge( mDF[,c("Combined_Key","ChinaSum","ItalySum")], mDF2[,c("Combined_Key", "SpainSum", "GermanySum", "UKSum" )], by="Combined_Key" )
+> ## 60 is the number of days in the travel data.
+> mDF$ChinaTravel <- mDF$ChinaSum/60.0
+> mDF$ItalyTravel <- mDF$ItalySum/60.0
+> mDF$SpainTravel <- mDF$SpainSum/60.0
+> mDF$GermanyTravel <- mDF$GermanySum/60.0
+> mDF$UKTravel <- mDF$UKSum/60.0
+> iceLandEntry$useMe <- (iceLandEntry$Jan+iceLandEntry$Feb)/60.0
+> 
+> t0DateChina <- "02-23-2020"
+> t0DateItaly <- "02-23-2020"
+> 
+> 
+> 
+> ## Table 2 - Lag 5
+> cutoffDate <- "03-10-2020"
+> Lag <- 5
+> ## For Reference: Here are the Three Booleans in EstimateAlpha()
+> ## excludeEarly, useItaly, useDECODE, Lag, fullEU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.01608404 
+> print( (1-alpha)/alpha)
+     Reg 
+61.17343 
+> 
+> 
+> ## Only China
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, FALSE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.01686531 
+> print( (1-alpha)/alpha)
+    Reg 
+58.2933 
+> 
+> ## Full EU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.01677569 
+> print( (1-alpha)/alpha)
+     Reg 
+58.61006 
+> 
+> 
+> ## Table 2: Lag 8
+> cutoffDate <- "03-13-2020"
+> Lag <- 8
+> 
+> 
+> ## excludeEarly, useItaly, useDECODE, Lag, fullEU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.04155921 
+> print( (1-alpha)/alpha)
+     Reg 
+23.06205 
+> 
+> 
+> ## Only China
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, FALSE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.04577236 
+> print( (1-alpha)/alpha)
+     Reg 
+20.84724 
+> 
+> ## Full EU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.04521819 
+> print( (1-alpha)/alpha)
+     Reg 
+21.11499 
+> 
+> ## Reproduction of the Figure
+> cutoffDate <- "03-10-2020"
+> Lag <- 5
+> 
+> 
+> ## excludeEarly, useItaly, useDECODE )
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> 
+> ## This will need to be edited as the data becomes more riched, and
+> ## hopefully automated.  For now, this just makes the county names on
+> ## the plot not seem to crowded.- If you want to look at King County,
+> ## it needs to be added to this file, or change label=shortnames to
+> ## label=Combined_Key
+> 
+> ## For Lag = 5
+> MergedData$shortnames <- c("Broward, FL", "Clark, NV", "Cook, IL", "Fulton, GA", "Harris, TX", "Hillsborough, FL", "Honolulu, HI", "Los Angeles, CA", "Maricopa AZ", "New York City, NY", "Philadelphia, PA", "Ramsey, MN", "San Diego, CA", "San Francisco, CA", "Suffolk, MA" )
+> 
+> 
+> ## Our standard error estimates
+> ## sqrt(vcov(alphaReg)[1,1] )
+> 
+> ## If you wish to look at each city individually
+> ## stargazer( MergedData[,c(1,4,7,8,9)], summary=FALSE )
+> 
+> temp <- function(x) {alphaReg$coef[1]*x}
+> 
+> pdf( "ScatterAlpha_Full.pdf")
+> fit <- lm(Confirmed ~ Reg - 1, data = MergedData)
+> ggplot(MergedData, aes(x=Reg, y=Confirmed)) +
++     geom_point(shape=1) +
++ 
++       # Use hollow circles
++     stat_function(fun = temp,
++                   color = "red", size=.5) +
++ 
++      geom_label_repel(aes(label = shortnames),
++                   box.padding   = 0.35, 
++                   point.padding = 0.5,
++                   segment.color = 'grey50') + 
++     ylab("Confirmed Cases") +
++     xlab("Estimated Infectious")
+> dev.off()
+null device 
+          1 
+> 
+> 
+> 
+> ## Reproduction of the second Figure
+> cutoffDate <- "03-13-2020"
+> Lag <- 8
+> 
+> t0DateChina <- "02-23-2020"
+> t0DateItaly <- "02-23-2020"
+> ## excludeEarly, useItaly, useDECODE )
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> 
+> ## This will need to be edited as the data becomes more riched, and
+> ## hopefully automated.  For now, this just makes the county names on
+> ## the plot not seem to crowded.- If you want to look at King County,
+> ## it needs to be added to this file, or change label=shortnames to
+> ## label=Combined_Key
+> 
+> 
+> 
+> ## For Lag = 8
+> MergedData$shortnames <- c("Broward, FL", "Clark, NV", "Cook, IL", "Dallas, TX", "Essex, NJ", "Fulton, GA", "Harris, TX", "Hillsborough, FL", "Honolulu, HI", "Los Angeles, CA", "Maricopa AZ", "Miami-Dade, FL", "Multnomah, OR", "New York City, NY", "Philadelphia, PA", "Ramsey, MN", "San Diego, CA", "San Francisco, CA", "Suffolk, MA", "Wayne, MI", "Whatcom, WA" )
+> 
+> ## Our standard error estimates
+> ## sqrt(vcov(alphaReg)[1,1] )
+> 
+> ## If you wish to look at each city individually
+> ## stargazer( MergedData[,c(1,4,7,8,9)], summary=FALSE )
+> 
+> temp <- function(x) {alphaReg$coef[1]*x}
+> 
+> pdf( "ScatterAlpha_Full_Lag8.pdf")
+> fit <- lm(Confirmed ~ Reg - 1, data = MergedData)
+> ggplot(MergedData, aes(x=Reg, y=Confirmed)) +
++     geom_point(shape=1) +
++ 
++       # Use hollow circles
++     stat_function(fun = temp,
++                   color = "red", size=.5) +
++ 
++      geom_label_repel(aes(label = shortnames),
++                   box.padding   = 0.35, 
++                   point.padding = 0.5,
++                   segment.color = 'grey50') + 
++     ylab("Confirmed Cases") +
++     xlab("Estimated Infectious")
+> dev.off()
+null device 
+          1 
+> 
+> 
+> 
+> 
+> 
+> matFive <- matrix( 0, 19, 29)
+> Lag <- 5
+> 
+> 
+> ## Note that because Iceland features its first infection on Feb 28,
+> ## Lagging with 5 days means we can only really start at Mar 6 before
+> ## we start getting some nonsense results.
+> for( i in 6:19 ){
++     ## Construct the string giving the date that will be used to find the file.
++     if(nchar(  as.character(i) ) == 1){
++         cutoffDate <- paste( "03-0", as.character(i),"-2020", sep = "")
++     }else{
++         cutoffDate <- paste( "03-", as.character(i),"-2020", sep = "")
++     }
++     
++     
++ 
++     for( j in 1:29){
++         if(nchar(  as.character(j) ) == 1){
++             t0DateChina <- paste( "02-0", as.character(j),"-2020", sep = "")
++         }else{
++             t0DateChina <- paste( "02-", as.character(j),"-2020", sep = "")
++         }
++ 
++         MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE )
++ 
++         alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
++ 
++         matFive[i,j] <- format(  alphaReg$coef[1], digits=4) ##format( alphaReg$coef[1], digits=4)
++     }
++ }
+> 
+> matEight <- matrix( 0, 19, 29)
+> Lag <- 8
+> 
+> 
+> ## Note that because Iceland features its first infection on Feb 28,
+> ## Lagging with 5 days means we can only really start at Mar 6 before
+> ## we start getting some nonsense results.
+> for( i in 9:19 ){
++     ## Construct the string giving the date that will be used to find the file.
++     if(nchar(  as.character(i) ) == 1){
++         cutoffDate <- paste( "03-0", as.character(i),"-2020", sep = "")
++     }else{
++         cutoffDate <- paste( "03-", as.character(i),"-2020", sep = "")
++     }
++     
++     
++ 
++     for( j in 1:29){
++         if(nchar(  as.character(j) ) == 1){
++             t0DateChina <- paste( "02-0", as.character(j),"-2020", sep = "")
++         }else{
++             t0DateChina <- paste( "02-", as.character(j),"-2020", sep = "")
++         }
++         
++ 
++         MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE )
++ 
++         alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
++ 
++         matEight[i,j] <- format(  alphaReg$coef[1], digits=4) ##format( alphaReg$coef[1], digits=4)
++     }
++ }
+> 
+> 
+> ## I apply a regular expression replace on this table to produce the
+> ## date, but this is contentwise the same.
+> stargazer( cbind( 6:19, matFive[6:19,c(1,5,10,15,20,25,29)] ) )
+
+% Table created by stargazer v.5.2.2 by Marek Hlavac, Harvard University. E-mail: hlavac at fas.harvard.edu
+% Date and time: Sun, Apr 12, 2020 - 11:53:29 PM
+\begin{table}[!htbp] \centering 
+  \caption{} 
+  \label{} 
+\begin{tabular}{@{\extracolsep{5pt}} cccccccc} 
+\\[-1.8ex]\hline 
+\hline \\[-1.8ex] 
+6 & 0.09759 & 0.09758 & 0.09756 & 0.09762 & 0.09767 & 0.09774 & 0.09767 \\ 
+7 & 0.05279 & 0.0528 & 0.05282 & 0.05275 & 0.05266 & 0.05249 & 0.05196 \\ 
+8 & 0.03083 & 0.03083 & 0.03084 & 0.03081 & 0.03076 & 0.03068 & 0.03047 \\ 
+9 & 0.01611 & 0.01611 & 0.01612 & 0.0161 & 0.01609 & 0.01605 & 0.01598 \\ 
+10 & 0.01683 & 0.01683 & 0.01684 & 0.01682 & 0.01679 & 0.01676 & 0.01668 \\ 
+11 & 0.02283 & 0.02284 & 0.02285 & 0.02282 & 0.02278 & 0.02273 & 0.02263 \\ 
+12 & 0.02043 & 0.02044 & 0.02046 & 0.02041 & 0.02037 & 0.02031 & 0.02022 \\ 
+13 & 0.03101 & 0.03102 & 0.03104 & 0.03099 & 0.03093 & 0.03086 & 0.03075 \\ 
+14 & 0.04247 & 0.04248 & 0.04252 & 0.04244 & 0.04236 & 0.04227 & 0.04212 \\ 
+15 & 0.03682 & 0.03683 & 0.03686 & 0.0368 & 0.03675 & 0.03669 & 0.0366 \\ 
+16 & 0.04809 & 0.0481 & 0.04815 & 0.04806 & 0.04798 & 0.0479 & 0.04777 \\ 
+17 & 0.06773 & 0.06776 & 0.06784 & 0.06769 & 0.06756 & 0.06743 & 0.06723 \\ 
+18 & 0.109 & 0.109 & 0.1092 & 0.1089 & 0.1086 & 0.1084 & 0.1081 \\ 
+19 & 0.2479 & 0.248 & 0.2483 & 0.2477 & 0.2472 & 0.2466 & 0.2459 \\ 
+\hline \\[-1.8ex] 
+\end{tabular} 
+\end{table} 
+> stargazer( cbind( 9:19, matEight[9:19,c(1,5,10,15,20,25,29)] ) )
+
+% Table created by stargazer v.5.2.2 by Marek Hlavac, Harvard University. E-mail: hlavac at fas.harvard.edu
+% Date and time: Sun, Apr 12, 2020 - 11:53:32 PM
+\begin{table}[!htbp] \centering 
+  \caption{} 
+  \label{} 
+\begin{tabular}{@{\extracolsep{5pt}} cccccccc} 
+\\[-1.8ex]\hline 
+\hline \\[-1.8ex] 
+9 & 0.1397 & 0.1397 & 0.1397 & 0.1395 & 0.1391 & 0.1382 & 0.1354 \\ 
+10 & 0.09538 & 0.09542 & 0.0954 & 0.09517 & 0.09485 & 0.09422 & 0.09265 \\ 
+11 & 0.08921 & 0.08927 & 0.08925 & 0.08898 & 0.08864 & 0.08804 & 0.08678 \\ 
+12 & 0.03928 & 0.03931 & 0.0393 & 0.03915 & 0.03899 & 0.03875 & 0.03832 \\ 
+13 & 0.0456 & 0.04563 & 0.04562 & 0.04548 & 0.04532 & 0.0451 & 0.04472 \\ 
+14 & 0.05725 & 0.0573 & 0.05729 & 0.05708 & 0.05686 & 0.05658 & 0.05613 \\ 
+15 & 0.05082 & 0.05086 & 0.05085 & 0.05071 & 0.05058 & 0.05039 & 0.0501 \\ 
+16 & 0.08169 & 0.08178 & 0.08176 & 0.08147 & 0.08121 & 0.08088 & 0.0804 \\ 
+17 & 0.1201 & 0.1203 & 0.1202 & 0.1197 & 0.1192 & 0.1186 & 0.1178 \\ 
+18 & 0.211 & 0.2114 & 0.2113 & 0.2102 & 0.2092 & 0.2081 & 0.2066 \\ 
+19 & 0.4528 & 0.4538 & 0.4536 & 0.4505 & 0.448 & 0.4452 & 0.4414 \\ 
+\hline \\[-1.8ex] 
+\end{tabular} 
+\end{table} 
+> 
+> ## Vec stores lags based around Mar 5 - Same as Mar 10 with 5 day lag. 
+> vec <- numeric(16)
+> start <- 5
+> for( l in 0:15 ){
++     ## Construct the string giving the date that will be used to find the file.
++     if(nchar(  as.character(start+l) ) == 1){
++         cutoffDate <- paste( "03-0", as.character(start+l),"-2020", sep = "")
++     }else{
++         cutoffDate <- paste( "03-", as.character(start+l),"-2020", sep = "")
++     }
++     Lag <- l
++ 
++     t0DateChina <- "02-23-20"
++     
++ 
++     MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE )
++ 
++     alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
++ 
++     vec[l+1] <- format(  alphaReg$coef[1], digits=3) ##format( alphaReg$coef[1], digits=4)
++ }
+> 
+> stargazer( cbind( 0:15, vec ) )
+
+% Table created by stargazer v.5.2.2 by Marek Hlavac, Harvard University. E-mail: hlavac at fas.harvard.edu
+% Date and time: Sun, Apr 12, 2020 - 11:53:34 PM
+\begin{table}[!htbp] \centering 
+  \caption{} 
+  \label{} 
+\begin{tabular}{@{\extracolsep{5pt}} cc} 
+\\[-1.8ex]\hline 
+\hline \\[-1.8ex] 
+ & vec \\ 
+\hline \\[-1.8ex] 
+0 & 0.00558 \\ 
+1 & 0.00874 \\ 
+2 & 0.0094 \\ 
+3 & 0.01 \\ 
+4 & 0.0123 \\ 
+5 & 0.0168 \\ 
+6 & 0.0287 \\ 
+7 & 0.0299 \\ 
+8 & 0.0452 \\ 
+9 & 0.0717 \\ 
+10 & 0.0758 \\ 
+11 & 0.124 \\ 
+12 & 0.211 \\ 
+13 & 0.436 \\ 
+14 & 1.1 \\ 
+15 & 1.41 \\ 
+\hline \\[-1.8ex] 
+\end{tabular} 
+\end{table} 
+> 
+> 
+> 
+> 
+> 
+> ## Now we get the results including Seattle (King County)
+> ## Lag 5
+> cutoffDate <- "03-10-2020"
+> Lag <- 5
+> ## For Reference: Here are the Three Booleans in EstimateAlpha()
+> ## excludeEarly, useItaly, useDECODE, Lag, fullEU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, TRUE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.02002581 
+> print( (1-alpha)/alpha)
+     Reg 
+48.93555 
+> 
+> 
+> ## Only China
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, FALSE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.02106433 
+> print( (1-alpha)/alpha)
+     Reg 
+46.47362 
+> 
+> ## Full EU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.02102525 
+> print( (1-alpha)/alpha)
+     Reg 
+46.56185 
+> 
+> 
+> ## Table 2: Lag 8
+> cutoffDate <- "03-13-2020"
+> Lag <- 8
+> 
+> 
+> ## excludeEarly, useItaly, useDECODE, Lag, fullEU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, TRUE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.04864626 
+> print( (1-alpha)/alpha)
+     Reg 
+19.55657 
+> 
+> 
+> ## Only China
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, FALSE, TRUE, Lag, FALSE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.05386888 
+> print( (1-alpha)/alpha)
+     Reg 
+17.56359 
+> 
+> ## Full EU
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, FALSE, TRUE, TRUE, Lag, TRUE  )
+> 
+> alphaReg <- lm( Confirmed ~ Reg - 1, data =MergedData)
+> alpha <- alphaReg$coef[1]
+> 
+> print(alpha)
+       Reg 
+0.05353371 
+> print( (1-alpha)/alpha)
+     Reg 
+17.67982 
+> 
+> 
+> ## Reproduction of "Table x: Estimated Total Infected By County"
+> 
+> stateInfection <- read.csv("../../Data/time_series_covid19_confirmed_US.csv" )
+> stateInfection <- merge( x=statePop[,c("Pop", "Combined_Key")], y = stateInfection,
++                         by="Combined_Key" )
+> 
+> cutoffDate <- "03-10-2020"
+> Lag <- 5
+> 
+> 
+> t0DateChina <- "02-23-2020"
+> t0DateItaly <- "02-23-2020"
+> ## excludeEarly, useItaly, useDECODE )
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> MergedData$shortnames <- c("Broward, FL", "Clark, NV", "Cook, IL", "Fulton, GA", "Harris, TX", "Hillsborough, FL", "Honolulu, HI", "Los Angeles, CA", "Maricopa AZ", "New York City, NY", "Philadelphia, PA", "Ramsey, MN", "San Diego, CA", "San Francisco, CA", "Suffolk, MA" )
+> Mar15Date <- match( "X3.15.2020", names(stateInfection ) )
+> Mar20Date <- match( "X3.20.2020", names(stateInfection ) )
+> stateInfection <- read.csv("../../Data/time_series_covid19_confirmed_US.csv" ) %>%
++     filter( !(Combined_Key %in% c( "King, Washington, US" ) ) )
+> 
+> MergedData <- merge( MergedData, stateInfection, by="Combined_Key" )
+>            
+> Mar15Date <- match( "X3.15.2020", names(MergedData ) )
+> Mar20Date <- match( "X3.20.2020", names(MergedData ) )
+> 
+> ## Haris Texas has a 0 element on the cumulative for Mar 20.
+> ## So we impute the Mar 19 number to be safe.
+> MergedData[match("Harris, Texas, US",MergedData$Combined_Key),Mar20Date] <-
++     MergedData[match("Harris, Texas, US",MergedData$Combined_Key),Mar20Date-1]
+> 
+> dat <- sort( matFive[6:19,] )
+> minNum <- as.numeric(dat[length(dat)*.9])
+> meanNum <- mean( as.numeric(dat))
+> maxNum <- as.numeric(dat[length(dat)*.1])
+> 
+> MergedData$Mar15Min <- round( MergedData[,Mar15Date] / minNum)
+> MergedData$Mar15Mean <- round( MergedData[,Mar15Date] / meanNum)
+> MergedData$Mar15Max <- round( MergedData[,Mar15Date] / maxNum)
+> 
+> MergedData$Mar20Min <- round( MergedData[,Mar20Date] / minNum)
+> MergedData$Mar20Mean <- round( MergedData[,Mar20Date] / meanNum)
+> MergedData$Mar20Max <- round( MergedData[,Mar20Date] / maxNum)
+> 
+> stargazer( MergedData[,c("shortnames", "X3.15.2020", "Mar15Min", "Mar15Mean", "Mar15Max", "X3.20.2020", "Mar20Min", "Mar20Mean", "Mar20Max")], summary = FALSE )
+
+% Table created by stargazer v.5.2.2 by Marek Hlavac, Harvard University. E-mail: hlavac at fas.harvard.edu
+% Date and time: Sun, Apr 12, 2020 - 11:53:35 PM
+\begin{table}[!htbp] \centering 
+  \caption{} 
+  \label{} 
+\begin{tabular}{@{\extracolsep{5pt}} cccccccccc} 
+\\[-1.8ex]\hline 
+\hline \\[-1.8ex] 
+ & shortnames & X3.15.2020 & Mar15Min & Mar15Mean & Mar15Max & X3.20.2020 & Mar20Min & Mar20Mean & Mar20Max \\ 
+\hline \\[-1.8ex] 
+1 & Broward, FL & $36$ & $330$ & $601$ & $2,143$ & $128$ & $1,174$ & $2,135$ & $7,619$ \\ 
+2 & Clark, NV & $16$ & $147$ & $267$ & $952$ & $126$ & $1,156$ & $2,102$ & $7,500$ \\ 
+3 & Cook, IL & $50$ & $459$ & $834$ & $2,976$ & $278$ & $2,550$ & $4,638$ & $16,548$ \\ 
+4 & Fulton, GA & $20$ & $183$ & $334$ & $1,190$ & $88$ & $807$ & $1,468$ & $5,238$ \\ 
+5 & Harris, TX & $11$ & $101$ & $184$ & $655$ & $30$ & $275$ & $501$ & $1,786$ \\ 
+6 & Hillsborough, FL & $4$ & $37$ & $67$ & $238$ & $32$ & $294$ & $534$ & $1,905$ \\ 
+7 & Honolulu, HI & $3$ & $28$ & $50$ & $179$ & $28$ & $257$ & $467$ & $1,667$ \\ 
+8 & Los Angeles, CA & $53$ & $486$ & $884$ & $3,155$ & $292$ & $2,679$ & $4,872$ & $17,381$ \\ 
+9 & Maricopa AZ & $4$ & $37$ & $67$ & $238$ & $34$ & $312$ & $567$ & $2,024$ \\ 
+10 & New York City, NY & $269$ & $2,468$ & $4,488$ & $16,012$ & $5,151$ & $47,257$ & $85,937$ & $306,607$ \\ 
+11 & Philadelphia, PA & $4$ & $37$ & $67$ & $238$ & $67$ & $615$ & $1,118$ & $3,988$ \\ 
+12 & Ramsey, MN & $5$ & $46$ & $83$ & $298$ & $16$ & $147$ & $267$ & $952$ \\ 
+13 & San Diego, CA & $16$ & $147$ & $267$ & $952$ & $127$ & $1,165$ & $2,119$ & $7,560$ \\ 
+14 & San Francisco, CA & $28$ & $257$ & $467$ & $1,667$ & $76$ & $697$ & $1,268$ & $4,524$ \\ 
+15 & Suffolk, MA & $27$ & $248$ & $450$ & $1,607$ & $86$ & $789$ & $1,435$ & $5,119$ \\ 
+\hline \\[-1.8ex] 
+\end{tabular} 
+\end{table} 
+> 
+> 
+> cutoffDate <- "03-13-2020"
+> Lag <- 8
+> 
+> 
+> t0DateChina <- "02-23-2020"
+> t0DateItaly <- "02-23-2020"
+> ## excludeEarly, useItaly, useDECODE )
+> MergedData <- EstimateAlpha( mDF, statePop, worldInfection, t0DateChina, t0DateItaly, cutoffDate, iceLandEntry, TRUE, TRUE, TRUE, Lag, TRUE  )
+> 
+> MergedData$shortnames <- c("Broward, FL", "Clark, NV", "Cook, IL", "Dallas, TX", "Essex, NJ", "Fulton, GA", "Harris, TX", "Hillsborough, FL", "Honolulu, HI", "Los Angeles, CA", "Maricopa AZ", "Miami-Dade, FL", "Multnomah, OR", "New York City, NY", "Philadelphia, PA", "Ramsey, MN", "San Diego, CA", "San Francisco, CA", "Suffolk, MA", "Wayne, MI", "Whatcom, WA" )
+> Mar15Date <- match( "X3.15.2020", names(stateInfection ) )
+> Mar20Date <- match( "X3.20.2020", names(stateInfection ) )
+> stateInfection <- read.csv("../../Data/time_series_covid19_confirmed_US.csv" ) %>%
++     filter( !(Combined_Key %in% c( "King, Washington, US" ) ) )
+> 
+> MergedData <- merge( MergedData, stateInfection, by="Combined_Key" )
+>            
+> Mar15Date <- match( "X3.15.2020", names(MergedData ) )
+> Mar20Date <- match( "X3.20.2020", names(MergedData ) )
+> 
+> ## Haris Texas has a 0 element on the cumulative for Mar 20.
+> ## So we impute the Mar 19 number to be safe.
+> MergedData[match("Harris, Texas, US",MergedData$Combined_Key),Mar20Date] <-
++     MergedData[match("Harris, Texas, US",MergedData$Combined_Key),Mar20Date-1]
+> 
+> MergedData[match("Miami-Dade, Florida, US",MergedData$Combined_Key),Mar20Date] <-
++     mean(c(MergedData$X3.18.2020[match("Miami-Dade, Florida, US",MergedData$Combined_Key)],
++            MergedData$X3.21.2020[match("Miami-Dade, Florida, US",MergedData$Combined_Key)]))
+> 
+> dat <- sort( matEight[9:19,] )
+> minNum <- as.numeric(dat[length(dat)*.9])
+> meanNum <- mean( as.numeric(dat))
+> maxNum <- as.numeric(dat[length(dat)*.1])
+> 
+> MergedData$Mar15Min <- round( MergedData[,Mar15Date] / minNum)
+> MergedData$Mar15Mean <- round( MergedData[,Mar15Date] / meanNum)
+> MergedData$Mar15Max <- round( MergedData[,Mar15Date] / maxNum)
+> 
+> MergedData$Mar20Min <- round( MergedData[,Mar20Date] / minNum)
+> MergedData$Mar20Mean <- round( MergedData[,Mar20Date] / meanNum)
+> MergedData$Mar20Max <- round( MergedData[,Mar20Date] / maxNum)
+> 
+> stargazer( MergedData[,c("shortnames", "X3.15.2020", "Mar15Min", "Mar15Mean", "Mar15Max", "X3.20.2020", "Mar20Min", "Mar20Mean", "Mar20Max")], summary = FALSE )
+
+% Table created by stargazer v.5.2.2 by Marek Hlavac, Harvard University. E-mail: hlavac at fas.harvard.edu
+% Date and time: Sun, Apr 12, 2020 - 11:53:35 PM
+\begin{table}[!htbp] \centering 
+  \caption{} 
+  \label{} 
+\begin{tabular}{@{\extracolsep{5pt}} cccccccccc} 
+\\[-1.8ex]\hline 
+\hline \\[-1.8ex] 
+ & shortnames & X3.15.2020 & Mar15Min & Mar15Mean & Mar15Max & X3.20.2020 & Mar20Min & Mar20Mean & Mar20Max \\ 
+\hline \\[-1.8ex] 
+1 & Broward, FL & $36$ & $170$ & $288$ & $803$ & $128$ & $605$ & $1,024$ & $2,854$ \\ 
+2 & Clark, NV & $16$ & $76$ & $128$ & $357$ & $126$ & $596$ & $1,008$ & $2,809$ \\ 
+3 & Cook, IL & $50$ & $237$ & $400$ & $1,115$ & $278$ & $1,315$ & $2,224$ & $6,198$ \\ 
+4 & Dallas, TX & $11$ & $52$ & $88$ & $245$ & $74$ & $350$ & $592$ & $1,650$ \\ 
+5 & Essex, NJ & $7$ & $33$ & $56$ & $156$ & $73$ & $345$ & $584$ & $1,628$ \\ 
+6 & Fulton, GA & $20$ & $95$ & $160$ & $446$ & $88$ & $416$ & $704$ & $1,962$ \\ 
+7 & Harris, TX & $11$ & $52$ & $88$ & $245$ & $30$ & $142$ & $240$ & $669$ \\ 
+8 & Hillsborough, FL & $4$ & $19$ & $32$ & $89$ & $32$ & $151$ & $256$ & $713$ \\ 
+9 & Honolulu, HI & $3$ & $14$ & $24$ & $67$ & $28$ & $132$ & $224$ & $624$ \\ 
+10 & Los Angeles, CA & $53$ & $251$ & $424$ & $1,182$ & $292$ & $1,381$ & $2,336$ & $6,511$ \\ 
+11 & Maricopa AZ & $4$ & $19$ & $32$ & $89$ & $34$ & $161$ & $272$ & $758$ \\ 
+12 & Miami-Dade, FL & $13$ & $61$ & $104$ & $290$ & $122.500$ & $579$ & $980$ & $2,731$ \\ 
+13 & Multnomah, OR & $1$ & $5$ & $8$ & $22$ & $12$ & $57$ & $96$ & $268$ \\ 
+14 & New York City, NY & $269$ & $1,272$ & $2,152$ & $5,998$ & $5,151$ & $24,366$ & $41,205$ & $114,849$ \\ 
+15 & Philadelphia, PA & $4$ & $19$ & $32$ & $89$ & $67$ & $317$ & $536$ & $1,494$ \\ 
+16 & Ramsey, MN & $5$ & $24$ & $40$ & $111$ & $16$ & $76$ & $128$ & $357$ \\ 
+17 & San Diego, CA & $16$ & $76$ & $128$ & $357$ & $127$ & $601$ & $1,016$ & $2,832$ \\ 
+18 & San Francisco, CA & $28$ & $132$ & $224$ & $624$ & $76$ & $360$ & $608$ & $1,695$ \\ 
+19 & Suffolk, MA & $27$ & $128$ & $216$ & $602$ & $86$ & $407$ & $688$ & $1,918$ \\ 
+20 & Wayne, MI & $8$ & $38$ & $64$ & $178$ & $67$ & $317$ & $536$ & $1,494$ \\ 
+21 & Whatcom, WA & $2$ & $9$ & $16$ & $45$ & $10$ & $47$ & $80$ & $223$ \\ 
+\hline \\[-1.8ex] 
+\end{tabular} 
+\end{table} 
+> 
+> MergedData$PercentageMar15 <- MergedData$Mar15Max / MergedData$Pop
+> MergedData$PercentageMar20 <- MergedData$Mar20Max / MergedData$Pop
+> 
+> 
+> proc.time()
+   user  system elapsed 
+ 74.689   0.185  74.918 
